@@ -1,0 +1,37 @@
+{
+  "camera_index": 0,
+  "cam_width": 640,
+  "cam_height": 480,
+  "cam_fps": 30,
+
+  "auto_calibrate": true,
+  "blink_click": true,
+  "dwell_click": true,
+  "gaze_smooth_frames": 6,
+  "eye_moves_cursor": true,
+  "eye_inactive_secs": 10,
+
+  "gesture_confirm_frames": 8,
+  "gesture_cooldown_frames": 20,
+  "gesture_smooth_frames": 4,
+  "gesture_smooth_min_count": 3,
+  "fist_confirm_frames": 6,
+  "fist_min_present_frames": 3,
+  "fist_edge_margin": 0.04,
+  "pinch_confirm_frames": 2,
+  "pinch_cooldown_frames": 6,
+  "pinch_distance_thresh": 0.09,
+  "pinch_clearance_factor": 1.8,
+  "gesture_scroll_sensitivity": 1200,
+  "gesture_scroll_min_delta": 0.001,
+  "gesture_scroll_confirm_frames": 2,
+  "gesture_scroll_smooth": 0.4,
+  "gesture_scroll_min_scroll": 1,
+  "gesture_inactive_secs": 15,
+
+  "mic_energy_threshold": 300,
+  "voice_speaking_secs": 2,
+
+  "ai_action_cooldown_frames": 15,
+  "start_paused": true
+}

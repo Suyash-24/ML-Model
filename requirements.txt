@@ -1,0 +1,29 @@
+# Eyecon — Python Dependencies
+# Install: pip install -r requirements.txt
+
+# Core vision
+opencv-python>=4.9.0
+mediapipe>=0.10.9
+numpy>=1.26.0
+
+# Cursor & keyboard control
+pyautogui>=0.9.54
+
+# Voice
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.14           # microphone driver (optional on Python 3.14+)
+
+# Text-to-speech
+pyttsx3>=2.90
+
+# Audio feedback
+pygame>=2.5.2
+
+# Native GUI
+PyQt6>=6.6.0
+
+# Optional: offline speech (no internet required)
+# vosk>=0.3.45
+
+# Optional: GPU acceleration
+# onnxruntime-gpu>=1.17.0

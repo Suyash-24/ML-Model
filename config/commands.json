@@ -1,0 +1,6 @@
+{
+  "_comment": "Add custom voice commands here. Key = phrase, Value = shell command.",
+  "open terminal": "cmd /c start cmd",
+  "open file manager": "explorer",
+  "open settings": "cmd /c start ms-settings:"
+}
