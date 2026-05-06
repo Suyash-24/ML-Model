@@ -92,7 +92,7 @@ def run_cli():
         gesture_data = gesture.process(frame)
 
         # ── AI Decision Layer decides what action to take ──────────────
-        action = ai_module.decide(eye_data, gesture_data)
+        action = ai_module.decide(eye_data, gesture_data, frame=frame)
         if action:
             ai_module.execute(action)
 
@@ -163,6 +163,13 @@ def run_gui():
     def _open_app(user):
         win_ref["win"] = eyecon_app.EyeconWindow()
         win_ref["win"].show()
+        # Tell AI module who logged in so it loads their biometric profile
+        if eyecon_app.BACKEND_AVAILABLE and hasattr(win_ref["win"], '_worker'):
+            worker = win_ref["win"]._worker
+            if hasattr(worker, '_ai'):
+                worker._ai.attach_verifier(user["id"])
+            if hasattr(worker, '_cfg'):
+                worker._cfg.set("bio_user_id", user["id"])
 
     auth.authenticated.connect(_open_app)
     auth.show()

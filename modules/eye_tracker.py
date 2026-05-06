@@ -4,7 +4,7 @@ modules/eye_tracker.py
 Eye Tracking & Cursor Control Module
 
 Features:
-  • Real-time gaze estimation via MediaPipe FaceLandmarker (Tasks API)
+  • Real-time gaze estimation via MediaPipe FaceMesh
   • Gaze-to-screen coordinate mapping
   • Dwell-based clicking (stare ≥ threshold → click)
   • Blink detection (rapid close/open → click)
@@ -15,13 +15,10 @@ import cv2
 import numpy as np
 import pyautogui
 import time
-import os
 import mediapipe as mp
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision as mp_vision
 from utils.logger import EyeconLogger
 
-# ── Eye landmark indices (MediaPipe 478-point mesh) ─────────────────────────
+# ── Eye landmark indices (MediaPipe 468-point mesh) ─────────────────────────
 LEFT_EYE_IDX  = [33,  133, 160, 159, 158, 144, 145, 153]
 RIGHT_EYE_IDX = [362, 263, 387, 386, 385, 373, 374, 380]
 LEFT_IRIS     = [468, 469, 470, 471, 472]
@@ -39,30 +36,13 @@ class EyeTracker:
         self.feedback = feedback
         self.logger   = EyeconLogger("EyeTracker")
 
-        # ── MediaPipe Tasks API: FaceLandmarker ─────────────────────────
-        model_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "models", "face_landmarker.task"
-        )
-
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(
-                f"Face landmarker model not found at {model_path}. "
-                "Download from: https://storage.googleapis.com/mediapipe-models/"
-                "face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
-            )
-
-        base_options = mp_python.BaseOptions(model_asset_path=model_path)
-        options = mp_vision.FaceLandmarkerOptions(
-            base_options=base_options,
-            output_face_blendshapes=False,
-            output_facial_transformation_matrixes=False,
-            num_faces=1,
-            min_face_detection_confidence=0.6,
-            min_face_presence_confidence=0.5,
+        self.mp_face  = mp.solutions.face_mesh
+        self.face_mesh = self.mp_face.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True,       # enables iris landmarks
+            min_detection_confidence=0.6,
             min_tracking_confidence=0.5,
         )
-        self.face_landmarker = mp_vision.FaceLandmarker.create_from_options(options)
 
         self.screen_w, self.screen_h = pyautogui.size()
         pyautogui.FAILSAFE = False
@@ -87,7 +67,7 @@ class EyeTracker:
         self._buf_size  = self.cfg.get("gaze_smooth_frames", 6)
 
         self.enabled = True
-        self.logger.info("EyeTracker initialised — iris tracking active (Tasks API)")
+        self.logger.info("EyeTracker initialised — iris tracking active")
 
     # ─────────────────────────────────────────────────────────────────────
     #  CALIBRATION
@@ -160,16 +140,12 @@ class EyeTracker:
 
         h, w = frame.shape[:2]
         rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        result = self.face_mesh.process(rgb)
 
-        # Convert to MediaPipe Image and detect
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = self.face_landmarker.detect(mp_image)
-
-        if not result.face_landmarks:
+        if not result.multi_face_landmarks:
             return {"active": False, "face": False}
 
-        # Tasks API returns list of NormalizedLandmark objects
-        lm = result.face_landmarks[0]
+        lm = result.multi_face_landmarks[0].landmark
 
         # ── Iris position (normalised 0–1) ─────────────────────────────
         iris = self._get_iris_from_landmarks(lm)
@@ -215,14 +191,12 @@ class EyeTracker:
         """Quick iris extraction from a raw frame (used during calibration)."""
         h, w = frame.shape[:2]
         rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = self.face_landmarker.detect(mp_image)
-        if not result.face_landmarks:
+        result = self.face_mesh.process(rgb)
+        if not result.multi_face_landmarks:
             return None
-        return self._get_iris_from_landmarks(result.face_landmarks[0])
+        return self._get_iris_from_landmarks(result.multi_face_landmarks[0].landmark)
 
     def _get_iris_from_landmarks(self, lm):
-        """Extract average iris position from landmarks."""
         left_x  = np.mean([lm[i].x for i in LEFT_IRIS])
         left_y  = np.mean([lm[i].y for i in LEFT_IRIS])
         right_x = np.mean([lm[i].x for i in RIGHT_IRIS])
@@ -321,5 +295,5 @@ class EyeTracker:
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 220, 120), 1)
 
     def cleanup(self):
-        self.face_landmarker.close()
+        self.face_mesh.close()
         self.logger.info(f"EyeTracker closed. Blinks: {self.blink_count}  Clicks: {self.click_count}")

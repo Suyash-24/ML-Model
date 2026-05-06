@@ -22,6 +22,10 @@ pygame>=2.5.2
 # Native GUI
 PyQt6>=6.6.0
 
+# Biometric enrollment
+sounddevice>=0.4.6      # microphone recording for voice enrollment
+scipy>=1.12.0           # DCT for MFCC computation (numpy already present)
+
 # Optional: offline speech (no internet required)
 # vosk>=0.3.45
 

@@ -25,6 +25,7 @@ from PyQt6.QtCore  import Qt, QPropertyAnimation, QEasingCurve, QTimer, pyqtSign
 from PyQt6.QtGui   import QFont, QColor, QPixmap, QPainter, QLinearGradient, QBrush
 
 from utils.auth import register_user, login_user, init_db
+from biometric_window import BiometricEnrollmentWindow
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  COLOUR PALETTE
@@ -705,6 +706,7 @@ class SignupPage(QWidget):
         if ok:
             # result is now a full user dict from register_user
             user = result
+            user["_is_new"] = True      # mark as new user for biometric enrollment
             self._banner.show_success(f"Welcome, {user.get('username', '')}! Signing you in…")
             QTimer.singleShot(800, lambda: self.signup_success.emit(user))
         else:
@@ -789,6 +791,24 @@ class AuthWindow(QMainWindow):
         self._anim2 = anim2
 
     def _on_auth(self, user: dict):
+        """Called on successful login OR after signup auto-login."""
+        is_new_user = user.get("_is_new", False)
+
+        if is_new_user:
+            # Show biometric enrollment before launching dashboard
+            self._bio_win = BiometricEnrollmentWindow(
+                user_id=user["id"],
+                username=user["username"]
+            )
+            self._bio_win.enrolled.connect(
+                lambda uid: self._after_enrollment(user)
+            )
+            self._bio_win.show()
+            self.hide()
+        else:
+            self._after_enrollment(user)
+
+    def _after_enrollment(self, user: dict):
         self.authenticated.emit(user)
         self.close()
 

@@ -33,15 +33,16 @@ MIDDLE_TIP   = 12; MIDDLE_PIP  = 10
 RING_TIP     = 16; RING_PIP    = 14
 PINKY_TIP    = 20; PINKY_PIP   = 18
 
-# Hand connection pairs for drawing (replicates mp.solutions.hands.HAND_CONNECTIONS)
+# Hand connection pairs for drawing (matches mp.solutions.hands.HAND_CONNECTIONS)
 HAND_CONNECTIONS = [
-    (0,1),(1,2),(2,3),(3,4),      # thumb
-    (0,5),(5,6),(6,7),(7,8),      # index
-    (0,9),(9,10),(10,11),(11,12), # middle  (changed: 5→0 for wrist-based)
-    (0,13),(13,14),(14,15),(15,16), # ring
-    (0,17),(17,18),(18,19),(19,20), # pinky
-    (5,9),(9,13),(13,17),         # palm
+    (0,1),(1,2),(2,3),(3,4),          # thumb
+    (0,5),(5,6),(6,7),(7,8),          # index
+    (9,10),(10,11),(11,12),           # middle (connected via palm 5→9)
+    (13,14),(14,15),(15,16),          # ring   (connected via palm 9→13)
+    (0,17),(17,18),(18,19),(19,20),   # pinky
+    (5,9),(9,13),(13,17),             # palm
 ]
+FINGERTIP_IDS = {4, 8, 12, 16, 20}
 
 
 class GestureEngine:
@@ -63,7 +64,9 @@ class GestureEngine:
                 "hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
             )
 
-        base_options = mp_python.BaseOptions(model_asset_path=model_path)
+        with open(model_path, "rb") as f:
+            model_data = f.read()
+        base_options = mp_python.BaseOptions(model_asset_buffer=model_data)
         options = mp_vision.HandLandmarkerOptions(
             base_options=base_options,
             num_hands=1,
@@ -412,18 +415,27 @@ class GestureEngine:
         h, w = frame.shape[:2]
         lm_list = data.get("landmarks")
         if lm_list:
-            # Draw hand landmarks manually (Tasks API doesn't have mp_draw)
+            # Draw hand skeleton (replicates mp_draw.draw_landmarks style)
             pts_px = [(int(lm.x * w), int(lm.y * h)) for lm in lm_list]
 
-            # Draw connections
+            # 1) Draw connections (green lines with dark outline)
             for i, j in HAND_CONNECTIONS:
                 if i < len(pts_px) and j < len(pts_px):
+                    cv2.line(frame, pts_px[i], pts_px[j], (10, 10, 10), 4)
                     cv2.line(frame, pts_px[i], pts_px[j], (0, 220, 0), 2)
 
-            # Draw landmarks
-            for px, py in pts_px:
-                cv2.circle(frame, (px, py), 4, (0, 220, 120), -1)
-                cv2.circle(frame, (px, py), 2, (255, 255, 255), -1)
+            # 2) Draw landmark dots on top of lines
+            for idx, (px, py) in enumerate(pts_px):
+                if idx in FINGERTIP_IDS:
+                    # Fingertips: larger, bright cyan with white core
+                    cv2.circle(frame, (px, py), 7, (10, 10, 10), -1)
+                    cv2.circle(frame, (px, py), 6, (220, 200, 0), -1)
+                    cv2.circle(frame, (px, py), 3, (255, 255, 255), -1)
+                else:
+                    # Regular joints: red-orange with white core
+                    cv2.circle(frame, (px, py), 5, (10, 10, 10), -1)
+                    cv2.circle(frame, (px, py), 4, (0, 130, 255), -1)
+                    cv2.circle(frame, (px, py), 2, (255, 255, 255), -1)
 
         g = data.get("gesture", "")
         a = data.get("action",  "")

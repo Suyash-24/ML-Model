@@ -33,5 +33,12 @@
   "voice_speaking_secs": 2,
 
   "ai_action_cooldown_frames": 15,
-  "start_paused": true
+  "start_paused": true,
+
+  "bio_check_interval_secs":  5,
+  "bio_face_threshold":       0.80,
+  "bio_voice_threshold":      0.75,
+  "bio_fail_streak_limit":    3,
+  "bio_pass_streak_reauth":   3,
+  "bio_grace_period_secs":   15
 }

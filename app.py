@@ -148,7 +148,7 @@ class CameraWorker(QObject):
             if self._backend:
                 eye_d  = self._eye.process(frame)
                 gest_d = self._gesture.process(frame)
-                action = self._ai.decide(eye_d, gest_d)
+                action = self._ai.decide(eye_d, gest_d, frame=frame)
                 if action:
                     self._ai.execute(action)
                     data["action"] = action.get("action")

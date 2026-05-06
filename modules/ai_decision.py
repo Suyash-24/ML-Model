@@ -16,6 +16,7 @@ import cv2
 import time
 import collections
 from utils.logger import EyeconLogger
+from modules.biometric_verifier import BiometricVerifier
 
 
 # ── Priority levels (higher = wins when conflict) ────────────────────────────
@@ -66,6 +67,15 @@ class AIDecisionModule:
         self._action_cooldown = 0
         self.decision_count   = 0
 
+        # ── Biometric verifier ─────────────────────────────────────────────
+        self._bio: BiometricVerifier | None = None
+        if hasattr(config, '_user_id') or config.get('bio_user_id'):
+            uid = config.get('bio_user_id')
+            if uid:
+                self._bio = BiometricVerifier(uid, config)
+                self._bio.on_impostor = self._on_impostor_detected
+                self._bio.on_resumed  = self._on_impostor_cleared
+
         self.logger.info("AI Decision Module online — priority: VOICE > GESTURE > EYE")
         if start_paused:
             self.eye.enabled = False
@@ -74,15 +84,39 @@ class AIDecisionModule:
             self.logger.info("System starts PAUSED — open palm to resume")
 
     # ─────────────────────────────────────────────────────────────────────
+    #  BIOMETRIC INTEGRATION
+    # ─────────────────────────────────────────────────────────────────────
+    def attach_verifier(self, user_id: int):
+        """Call this right after login with the logged-in user's id."""
+        self._bio = BiometricVerifier(user_id, self.cfg)
+        self._bio.on_impostor = self._on_impostor_detected
+        self._bio.on_resumed  = self._on_impostor_cleared
+
+    def _on_impostor_detected(self, score: float):
+        self.state            = "PAUSED"
+        self.eye.enabled      = False
+        self.gesture.enabled  = False
+        self.feedback.speak("Unrecognised user. System paused.")
+        self.logger.warning(f"IMPOSTOR — all input disabled (score={score:.3f})")
+
+    def _on_impostor_cleared(self):
+        self.state            = "ACTIVE"
+        self.eye.enabled      = True
+        self.gesture.enabled  = True
+        self.feedback.speak("Identity confirmed. Resuming.")
+        self.logger.info("Identity verified — system resumed")
+
+    # ─────────────────────────────────────────────────────────────────────
     #  MAIN DECISION FUNCTION  (called every frame)
     # ─────────────────────────────────────────────────────────────────────
-    def decide(self, eye_data, gesture_data):
+    def decide(self, eye_data, gesture_data, frame=None):
         """
         Receive current eye and gesture data.
         Voice data is async (from voice.get_last_command()).
         Return the best action dict or None.
         """
         now = time.time()
+        self._last_frame = frame
         self._action_cooldown = max(0, self._action_cooldown - 1)
 
         # ── Poll voice command ─────────────────────────────────────────
@@ -122,6 +156,12 @@ class AIDecisionModule:
                     "data":     {},
                 }
             return None
+
+        # ── Biometric check ────────────────────────────────────────────────
+        if self._bio is not None:
+            bio_result = self._bio.process(frame if frame is not None else self._last_frame)
+            if bio_result.get("impostor"):
+                return None   # hard block — no actions while impostor flag active
 
         # ── Build candidate actions from each modality ─────────────────
         candidates = []
@@ -272,6 +312,10 @@ class AIDecisionModule:
         legend = "Priority: VOICE(3) > GESTURE(2) > EYE(1)"
         cv2.putText(frame, legend, (w - 340, h - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (120, 120, 120), 1)
+
+        # Biometric overlay
+        if self._bio is not None:
+            self._bio.draw_overlay(frame)
 
     # ─────────────────────────────────────────────────────────────────────
     #  ANALYTICS
