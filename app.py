@@ -371,10 +371,12 @@ class EyeconWindow(QMainWindow):
     GESTURE_MAP = {
         "FIST":        ("✊", "FIST — PAUSE SYSTEM"),
         "OPEN_PALM":   ("✋", "OPEN PALM — SYSTEM ACTIVE"),
-        "PINCH":       ("🤏", "PINCH — CLICK / SELECT"),
+        "OK":          ("👌", "OK — CLICK"),
+        "PINCH":       ("🤏", "PINCH — DRAG"),
         "TWO_FINGERS": ("✌️",  "TWO FINGERS — SCROLL"),
         "POINTING":    ("👉", "POINTING — SWIPE MODE"),
         "FOUR_FINGERS": ("4", "FOUR FINGERS — VOLUME UP"),
+  
         "THREE_FINGERS": ("3", "THREE FINGERS — VOLUME DOWN"),
         "UNKNOWN":     ("❓", "UNKNOWN GESTURE"),
         "—":           ("✋", "NO HAND — OPEN PALM TO START"),
@@ -390,7 +392,7 @@ class EyeconWindow(QMainWindow):
         ("E",  "Blink ×2 → right click"),
         ("V",  '"increase volume" → +10%'),
         ("AI", "Eye inactive → gesture mode"),
-        ("G",  "Pinch → item selected"),
+        ("G",  "OK → click"),
     ]
 
     def __init__(self):

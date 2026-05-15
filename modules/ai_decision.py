@@ -140,8 +140,10 @@ class AIDecisionModule:
         # ── State machine ──────────────────────────────────────────────
         paused = self.voice.paused or self.state == STATE_PAUSED
         if paused:
-            g_exec = gesture_data.get("executed") if gesture_data.get("active") else None
-            if g_exec == "RESUME":
+            g_action = None
+            if gesture_data.get("active") and gesture_data.get("executed"):
+                g_action = gesture_data.get("action")
+            if g_action == "RESUME":
                 return {
                     "source":   "GESTURE",
                     "priority": PRIORITY["GESTURE"],
@@ -176,12 +178,14 @@ class AIDecisionModule:
             })
 
         # Gesture (middle priority)
-        g_exec = gesture_data.get("executed") if gesture_data.get("active") else None
-        if g_exec and not voice_recent:
+        g_action = None
+        if gesture_data.get("active") and gesture_data.get("executed"):
+            g_action = gesture_data.get("action")
+        if g_action and not voice_recent:
             candidates.append({
                 "source":   "GESTURE",
                 "priority": PRIORITY["GESTURE"],
-                "action":   g_exec,
+                "action":   g_action,
                 "data":     gesture_data,
             })
 
@@ -209,7 +213,7 @@ class AIDecisionModule:
             return None
 
         # ── Cooldown gate ──────────────────────────────────────────────
-        is_scroll = str(winner["action"]).startswith("SCROLL(")
+        is_scroll = str(winner["action"]).startswith("SCROLL")
         if self._action_cooldown > 0 and winner["source"] != "VOICE" and not is_scroll:
             return None
 
@@ -274,7 +278,7 @@ class AIDecisionModule:
     # ─────────────────────────────────────────────────────────────────────
     def _is_noise(self, action, buf):
         """Suppress if same action has fired ≥4 times in the last 5 frames."""
-        if str(action).startswith("SCROLL("):
+        if str(action).startswith("SCROLL"):
             return False
         if not buf:
             return False

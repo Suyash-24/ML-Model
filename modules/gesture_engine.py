@@ -28,11 +28,10 @@ GESTURE MAP (tilt-invariant):
   ✋ OPEN PALM       → Neutral / resume
   ✊ FIST            → Pause system
   ☝  INDEX ONLY     → Move cursor (Kalman-smoothed)
-  🤏 PINCH           → Click (short) / Scroll (move) / Drag (hold)
-  ✌  TWO FINGERS    → Volume control (proportional)
-  🌟 THREE FINGERS   → Brightness control
-  👍 THUMBS UP       → Volume +3
-  👎 THUMBS DOWN     → Volume -3
+    🤏 PINCH           → Click (short) / Drag (hold)
+    ✌  TWO FINGERS    → Smooth scroll (proportional)
+    🤟 THREE FINGERS  → Volume control (proportional)
+    🖐 FOUR FINGERS   → Volume up (discrete)
   👌 OK              → Double click
   🤙 PINKY+THUMB    → Switch tab
 
@@ -228,11 +227,25 @@ class GestureEngine:
         # ── Config ────────────────────────────────────────────────────
         self._pinch_thresh       = config.get("pinch_distance_thresh",  0.060)
         self._pinch_hold_frames  = config.get("pinch_hold_frames",        20)
-        self._scroll_sens        = config.get("scroll_sensitivity",       900)
-        self._scroll_h_sens      = config.get("scroll_h_sensitivity",     400)
+        self._ok_thresh          = config.get("ok_distance_thresh",     0.055)
+        self._ok_cd              = config.get("ok_cooldown_frames",        6)
         self._scroll_dz          = config.get("scroll_deadzone",         0.007)
+        self._scroll_smooth      = config.get("scroll_smooth",           0.35)
+        self._scroll_reset_dz    = config.get("scroll_reset_deadzone",   self._scroll_dz * 0.6)
+        self._scroll_step        = config.get("scroll_step",            90)
+        self._scroll_trigger     = config.get("scroll_trigger",         0.02)
+        self._scroll_trigger_x   = config.get("scroll_trigger_x",       self._scroll_trigger)
+        self._scroll_trigger_y   = config.get("scroll_trigger_y",       self._scroll_trigger)
+        self._scroll_hold_start  = config.get("scroll_hold_start",      0.03)
+        self._scroll_hold_frames = config.get("scroll_hold_interval_frames", 6)
+        self._scroll_invert_x    = config.get("scroll_invert_x",         False)
+        self._scroll_invert_y    = config.get("scroll_invert_y",         False)
+        self._scroll_axis_bias_x = config.get("scroll_axis_bias_x",     1.35)
+        self._scroll_use_shift_h = config.get("scroll_use_shift_hscroll", True)
         self._vol_sens           = config.get("volume_sensitivity",        90)
         self._confirm_fist       = config.get("fist_confirm_frames",        8)
+        self._confirm_ok         = config.get("ok_confirm_frames",          3)
+        self._confirm_scroll     = config.get("gesture_scroll_confirm_frames", 2)
         self._confirm_default    = config.get("gesture_confirm_frames",     4)
         self._global_cd          = config.get("gesture_global_cooldown",   14)
         # Camera usable zone (clip edges to avoid edge jitter)
@@ -242,12 +255,27 @@ class GestureEngine:
         self._prev_raw      = "NEUTRAL"
         self._confirm_frames = 0
         self._action_cd      = 0
+        self._ok_latched     = False
+
+        self.actions_enabled = True
 
         # Pinch
         self._pinch_start   = None   # (nx, ny) where pinch began
         self._pinch_ref     = None   # rolling reference for proportional scroll
         self._pinch_frames  = 0
         self._drag_active   = False
+
+        # Scroll (two-finger)
+        self._scroll_anchor = None
+        self._scroll_ref = None
+        self._scroll_last = None
+        self._scroll_accum = 0.0
+        self._scroll_axis = None
+        self._scroll_dir = 0
+        self._scroll_hold_frames_count = 0
+
+        # Cursor tracking
+        self._cursor_active = False
 
         # Volume reference
         self._vol_ref_y     = None
@@ -282,7 +310,8 @@ class GestureEngine:
         if not result.multi_hand_landmarks:
             self._drop_frames += 1
 
-            if self._drop_frames <= MAX_DROP_FRAMES and self._last_pts is not None:
+            if (self._drop_frames <= MAX_DROP_FRAMES and self._last_pts is not None
+                    and self.actions_enabled and self._cursor_active):
                 # Extrapolate cursor using Kalman velocity during brief drops
                 sx = int(np.clip(self._kx.predict(), 0, self._sw))
                 sy = int(np.clip(self._ky.predict(), 0, self._sh))
@@ -312,6 +341,9 @@ class GestureEngine:
         # Classify
         raw = self._classify(pts, lpts, fu)
 
+        if raw != "OK":
+            self._ok_latched = False
+
         # Confirm
         if raw == self._prev_raw:
             self._confirm_frames += 1
@@ -319,7 +351,14 @@ class GestureEngine:
             self._confirm_frames = 1
             self._prev_raw = raw
 
-        needed    = self._confirm_fist if raw == "FIST" else self._confirm_default
+        if raw == "FIST":
+            needed = self._confirm_fist
+        elif raw == "OK":
+            needed = self._confirm_ok
+        elif raw == "TWO_FINGERS":
+            needed = self._confirm_scroll
+        else:
+            needed = self._confirm_default
         confirmed = self._confirm_frames >= needed
 
         action   = None
@@ -351,33 +390,30 @@ class GestureEngine:
         thumb, idx, mid, ring, pinky = fu
         n_up = sum(fu)
 
+        thumb_vec = pts[THUMB_TIP] - pts[THUMB_CMC]
+        index_vec = pts[INDEX_MCP] - pts[WRIST]
+        thumb_cos = float(
+            np.dot(thumb_vec, index_vec)
+            / (np.linalg.norm(thumb_vec) * np.linalg.norm(index_vec) + 1e-6)
+        )
+        thumb_curl = thumb_cos > 0.2
+        palm_len = abs(lpts[MIDDLE_MCP][1]) + 1e-6
+        thumb_spread_ratio = abs(lpts[THUMB_TIP][0]) / palm_len
+
         # ── FIST ─────────────────────────────────────────────────────
         if n_up == 0:
             return "FIST"
 
-        # ── OPEN PALM ────────────────────────────────────────────────
-        if n_up >= 4:
-            return "OPEN_PALM"
-
-        # ── THUMBS UP / DOWN (thumb only, rest curled) ───────────────
-        if thumb and not idx and not mid and not ring and not pinky:
-            # In local frame, thumb tip Y > 0 = extending "up the palm" = thumbs up
-            if lpts[THUMB_TIP][1] > 0.10:
-                return "THUMBS_UP"
-            if lpts[THUMB_TIP][1] < -0.05:
-                return "THUMBS_DOWN"
+        # ── OK  (thumb+index pinched, other fingers up) ──────────────
+        d_ok = float(np.linalg.norm(pts[THUMB_TIP] - pts[INDEX_TIP]))
+        other_up = int(mid) + int(ring) + int(pinky)
+        if other_up >= 2 and d_ok < self._ok_thresh:
+            return "OK"
 
         # ── PINCH (thumb + index close, others curled) ───────────────
         if not mid and not ring and not pinky:
-            d = float(np.linalg.norm(pts[THUMB_TIP] - pts[INDEX_TIP]))
-            if d < self._pinch_thresh:
+            if d_ok < self._pinch_thresh:
                 return "PINCH"
-
-        # ── OK  (middle+ring+pinky up, thumb+index pinched) ──────────
-        if mid and ring and pinky and not idx:
-            d = float(np.linalg.norm(pts[THUMB_TIP] - pts[INDEX_TIP]))
-            if d < self._pinch_thresh * 1.3:
-                return "OK"
 
         # ── CURSOR (index only) ───────────────────────────────────────
         if idx and not mid and not ring and not pinky:
@@ -388,8 +424,17 @@ class GestureEngine:
             return "TWO_FINGERS"
 
         # ── THREE FINGERS ─────────────────────────────────────────────
-        if idx and mid and ring and not pinky:
+        if idx and mid and ring and not pinky and not thumb:
             return "THREE_FINGERS"
+
+        # ── OPEN PALM (prioritize over four fingers) ─────────────────
+        if idx and mid and ring and pinky:
+            if thumb or thumb_spread_ratio > 0.25:
+                return "OPEN_PALM"
+
+        # ── FOUR FINGERS (thumb tucked) ───────────────────────────────
+        if idx and mid and ring and pinky and not thumb and thumb_curl and thumb_spread_ratio < 0.18:
+            return "FOUR_FINGERS"
 
         # ── PINKY + THUMB (call me) → switch tab ─────────────────────
         if thumb and pinky and not idx and not mid and not ring:
@@ -403,9 +448,20 @@ class GestureEngine:
     def _execute(self, gesture, pts, lpts, fu):
         cd_ok = self._action_cd == 0
 
+        if not self.actions_enabled:
+            if gesture == "OPEN_PALM":
+                self._on_hand_lost()
+                return "RESUME", True
+            return gesture, False
+
+        if gesture != "CURSOR":
+            self._cursor_active = False
+
         if gesture == "OPEN_PALM":
-            self._on_hand_lost()
-            return "NEUTRAL", False
+            if not self.actions_enabled:
+                self._on_hand_lost()
+                return "RESUME", True
+            return "OPEN_PALM", False
 
         if gesture == "FIST":
             if self._drag_active:
@@ -424,28 +480,26 @@ class GestureEngine:
             return self._handle_pinch(pts)
 
         if gesture == "TWO_FINGERS":
-            return self._handle_volume(pts, lpts)
+            return self._handle_scroll(pts, lpts)
 
         if gesture == "THREE_FINGERS":
-            return self._handle_brightness(pts, lpts)
+            return self._handle_volume(pts, lpts)
 
-        if gesture == "THUMBS_UP" and cd_ok:
-            for _ in range(3): pyautogui.press("volumeup")
+        if gesture == "FOUR_FINGERS" and cd_ok:
+            for _ in range(3):
+                pyautogui.press("volumeup")
             self.feedback.beep(660, 70)
             self._action_cd = self._global_cd * 2
             return "VOLUME_UP", True
 
-        if gesture == "THUMBS_DOWN" and cd_ok:
-            for _ in range(3): pyautogui.press("volumedown")
-            self.feedback.beep(220, 70)
-            self._action_cd = self._global_cd * 2
-            return "VOLUME_DOWN", True
-
         if gesture == "OK" and cd_ok:
-            pyautogui.doubleClick()
+            if self._ok_latched:
+                return "OK", False
+            pyautogui.click()
             self.feedback.beep(520, 60)
-            self._action_cd = self._global_cd * 3
-            return "DOUBLE_CLICK", True
+            self._action_cd = self._ok_cd
+            self._ok_latched = True
+            return "CLICK", True
 
         if gesture == "PINKY_THUMB" and cd_ok:
             pyautogui.hotkey("ctrl", "tab")
@@ -459,6 +513,7 @@ class GestureEngine:
     #  CURSOR MOVE  — Kalman-filtered
     # ─────────────────────────────────────────────────────────────────────────
     def _move_cursor(self, pts):
+        self._cursor_active = True
         if self._drag_active:
             pyautogui.mouseUp(); self._drag_active = False
 
@@ -491,27 +546,6 @@ class GestureEngine:
 
         self._pinch_frames += 1
 
-        dx = cx - self._pinch_ref[0]
-        dy = cy - self._pinch_ref[1]
-
-        total_dy = cy - self._pinch_start[1]
-        total_dx = cx - self._pinch_start[0]
-
-        # ── Significant movement → proportional scroll ────────────────
-        if abs(total_dy) > self._scroll_dz or abs(total_dx) > self._scroll_dz * 1.5:
-            if abs(total_dy) >= abs(total_dx):
-                # Vertical scroll
-                if abs(dy) > self._scroll_dz * 0.5:
-                    pyautogui.scroll(int(-dy * self._scroll_sens))
-                    self._pinch_ref = (cx, cy)
-                return "SCROLL_V", True
-            else:
-                # Horizontal scroll
-                if abs(dx) > self._scroll_dz * 0.5:
-                    pyautogui.hscroll(int(dx * self._scroll_h_sens))
-                    self._pinch_ref = (cx, cy)
-                return "SCROLL_H", True
-
         # ── Held still long enough → drag ────────────────────────────
         if self._pinch_frames >= self._pinch_hold_frames:
             if not self._drag_active:
@@ -528,6 +562,108 @@ class GestureEngine:
 
         return "PINCH_HOLD", False
 
+    # ─────────────────────────────────────────────────────────────────────────
+    #  TWO-FINGER SCROLL  — proportional with accumulation
+    # ─────────────────────────────────────────────────────────────────────────
+    def _handle_scroll(self, pts, lpts):
+        raw_x = float((lpts[INDEX_TIP][0] + lpts[MIDDLE_TIP][0]) / 2.0)
+        raw_y = float((lpts[INDEX_TIP][1] + lpts[MIDDLE_TIP][1]) / 2.0)
+
+        if self._scroll_last is None:
+            self._scroll_last = (raw_x, raw_y)
+        last_x, last_y = self._scroll_last
+        filt_x = last_x + (raw_x - last_x) * self._scroll_smooth
+        filt_y = last_y + (raw_y - last_y) * self._scroll_smooth
+        self._scroll_last = (filt_x, filt_y)
+
+        if self._scroll_anchor is None:
+            self._scroll_anchor = (filt_x, filt_y)
+            self._scroll_ref = (filt_x, filt_y)
+            self._scroll_accum = 0.0
+            self._scroll_axis = None
+            self._scroll_dir = 0
+            self._scroll_hold_frames_count = 0
+            return "SCROLL_READY", False
+
+        anchor_x, anchor_y = self._scroll_anchor
+        dx = filt_x - anchor_x
+        dy = filt_y - anchor_y
+
+        if self._scroll_axis is None:
+            if max(abs(dx), abs(dy)) < self._scroll_dz:
+                return "TWO_FINGERS", False
+            self._scroll_axis = "x" if abs(dx) * self._scroll_axis_bias_x > abs(dy) else "y"
+            axis_delta = dx if self._scroll_axis == "x" else dy
+            self._scroll_dir = 1 if axis_delta > 0 else -1
+            self._scroll_ref = (filt_x, filt_y)
+            self._scroll_accum = 0.0
+            self._scroll_hold_frames_count = 0
+            return "SCROLL_START", False
+
+        axis_anchor_delta = dx if self._scroll_axis == "x" else dy
+
+        if axis_anchor_delta * self._scroll_dir < 0:
+            if max(abs(dx), abs(dy)) < self._scroll_reset_dz:
+                self._scroll_axis = None
+                self._scroll_dir = 0
+                self._scroll_anchor = (filt_x, filt_y)
+                self._scroll_ref = (filt_x, filt_y)
+                self._scroll_accum = 0.0
+                self._scroll_hold_frames_count = 0
+            else:
+                self._scroll_ref = (filt_x, filt_y)
+                self._scroll_accum = 0.0
+                self._scroll_hold_frames_count = 0
+            return "TWO_FINGERS", False
+
+        ref_x, ref_y = self._scroll_ref
+        axis_delta = (filt_x - ref_x) if self._scroll_axis == "x" else (filt_y - ref_y)
+        self._scroll_accum += axis_delta
+        self._scroll_ref = (filt_x, filt_y)
+
+        trigger = self._scroll_trigger_x if self._scroll_axis == "x" else self._scroll_trigger_y
+        steps = int(self._scroll_accum / trigger)
+        if steps != 0:
+            units = steps * self._scroll_step
+            if self._scroll_axis == "y":
+                if self._scroll_invert_y:
+                    units *= -1
+                pyautogui.scroll(-units)
+            else:
+                if self._scroll_invert_x:
+                    units *= -1
+                self._hscroll(units)
+            self._scroll_accum -= steps * trigger
+            self._scroll_hold_frames_count = 0
+            return f"SCROLL({units})", True
+
+        if abs(axis_anchor_delta) >= self._scroll_hold_start:
+            self._scroll_hold_frames_count += 1
+            if self._scroll_hold_frames_count >= self._scroll_hold_frames:
+                units = self._scroll_step * self._scroll_dir
+                if self._scroll_axis == "y":
+                    if self._scroll_invert_y:
+                        units *= -1
+                    pyautogui.scroll(-units)
+                else:
+                    if self._scroll_invert_x:
+                        units *= -1
+                    self._hscroll(units)
+                self._scroll_hold_frames_count = 0
+                return f"SCROLL({units})", True
+        else:
+            self._scroll_hold_frames_count = 0
+
+        return "TWO_FINGERS", False
+
+    def _hscroll(self, units: int):
+        if self._scroll_use_shift_h:
+            pyautogui.keyDown("shift")
+            pyautogui.scroll(units)
+            pyautogui.keyUp("shift")
+        else:
+            pyautogui.hscroll(units)
+
     def _release_pinch(self):
         """Called when pinch gesture ends (hand opens or lost)."""
         action = None
@@ -536,13 +672,6 @@ class GestureEngine:
             self._drag_active = False
             self.feedback.beep(280, 80)
             action = "DROP"
-        elif self._pinch_frames is not None and self._pinch_frames < self._pinch_hold_frames:
-            if self._action_cd == 0:
-                pyautogui.click()
-                self.feedback.beep(480, 55)
-                self._action_cd = self._global_cd
-                self.gesture_count += 1
-                action = "CLICK"
         self._pinch_start  = None
         self._pinch_ref    = None
         self._pinch_frames = 0
@@ -552,8 +681,8 @@ class GestureEngine:
     #  VOLUME  — two fingers, proportional to vertical movement
     # ─────────────────────────────────────────────────────────────────────────
     def _handle_volume(self, pts, lpts):
-        # Use local frame Y of index tip — tilt invariant
-        ctrl_y = float(lpts[INDEX_TIP][1])
+        # Use average local frame Y of three fingertips — tilt invariant
+        ctrl_y = float((lpts[INDEX_TIP][1] + lpts[MIDDLE_TIP][1] + lpts[RING_TIP][1]) / 3.0)
 
         if self._vol_ref_y is None:
             self._vol_ref_y = ctrl_y
@@ -561,8 +690,8 @@ class GestureEngine:
 
         dy = ctrl_y - self._vol_ref_y
 
-        if abs(dy) > 0.015:
-            steps = min(int(abs(dy) * self._vol_sens), 5)
+        if abs(dy) > 0.010:
+            steps = min(int(abs(dy) * self._vol_sens), 6)
             key   = "volumedown" if dy < 0 else "volumeup"
             for _ in range(steps):
                 pyautogui.press(key)
@@ -603,6 +732,15 @@ class GestureEngine:
         self._pinch_ref      = None
         self._pinch_frames   = 0
         self._vol_ref_y      = None
+        self._ok_latched     = False
+        self._scroll_anchor = None
+        self._scroll_ref = None
+        self._scroll_last = None
+        self._scroll_accum = 0.0
+        self._scroll_axis = None
+        self._scroll_dir = 0
+        self._scroll_hold_frames_count = 0
+        self._cursor_active  = False
         if hasattr(self, "_bright_ref_y"):
             self._bright_ref_y = None
         self._drop_frames    = 0
