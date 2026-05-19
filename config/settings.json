@@ -53,5 +53,16 @@
   "voice_speaking_secs": 2,
 
   "ai_action_cooldown_frames": 15,
-  "start_paused": true
+  "start_paused": true,
+
+  "wednesday_memory_turns": 10,
+
+  "wake_word": "wednesday",
+  "_wake_word_help": "Wake word uses Whisper Tiny — free, offline, no API key. Just say 'wednesday'.",
+
+  "elevenlabs_api_key": "",
+  "_elevenlabs_help": "Optional premium TTS. Leave blank to use free Windows Zira voice.",
+
+  "ollama_model": "llama3.2:3b",
+  "_ollama_help": "LLM is local via Ollama — free. Run 'ollama pull llama3.2:3b' once."
 }

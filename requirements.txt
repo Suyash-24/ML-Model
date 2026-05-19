@@ -1,33 +1,41 @@
-# Eyecon — Python Dependencies
-# Install: pip install -r requirements.txt
+# =======================================================
+#  Eyecon FRIDAY  --  requirements.txt
+#  Install: pip install -r requirements.txt
+# =======================================================
 
-# Core vision
+# -- Core vision -----------------------------------------
 opencv-python>=4.9.0
 mediapipe>=0.10.9
 numpy>=1.26.0
 
-# Cursor & keyboard control
+# -- Cursor / keyboard control ---------------------------
 pyautogui>=0.9.54
 
-# Voice
-SpeechRecognition>=3.10.0
-pyaudio>=0.2.14           # microphone driver (optional on Python 3.14+)
-
-# Text-to-speech
-pyttsx3>=2.90
-
-# Audio feedback
-pygame>=2.5.2
-
-# Native GUI
+# -- Native UI -------------------------------------------
 PyQt6>=6.6.0
+PyQt6-WebEngine>=6.6.0          # QWebEngineView for Three.js sphere
 
-# Biometric enrollment
-sounddevice>=0.4.6      # microphone recording for voice enrollment
-scipy>=1.12.0           # DCT for MFCC computation (numpy already present)
+# -- FRIDAY voice pipeline -------------------------------
+openai-whisper>=20231117        # Offline STT (GPU-accelerated)
+ollama>=0.1.8                   # Local LLM client
 
-# Optional: offline speech (no internet required)
-# vosk>=0.3.45
+# ElevenLabs TTS (FRIDAY voice clone)
+elevenlabs>=1.2.0
 
-# Optional: GPU acceleration
-# onnxruntime-gpu>=1.17.0
+# Wake word detection
+pvporcupine>=3.0.0              # "Hey FRIDAY" always-on (get free key at picovoice.io)
+sounddevice>=0.4.6              # Microphone recording
+
+# -- Biometric enrollment --------------------------------
+scipy>=1.12.0                   # DCT for MFCC (voice enrollment)
+
+# -- Audio fallback --------------------------------------
+pyttsx3>=2.90                   # Offline TTS fallback when ElevenLabs unavailable
+
+# -- Optional (improves performance) ---------------------
+# torch>=2.1.0+cu118            # GPU acceleration for Whisper (install separately)
+# onnxruntime-gpu>=1.17.0       # Optional GPU inference
+
+# -- Utilities -------------------------------------------
+# All below are stdlib or already pulled in by above deps
+# python-dotenv                 # For .env API key management (optional)

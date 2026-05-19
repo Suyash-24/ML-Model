@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>FRIDAY Sphere</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;background:#0d0d0f;overflow:hidden}
+  #container{width:100%;height:100%;position:relative;overflow:visible}
+  #status{
+    position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
+    font-family:'Courier New',monospace;font-size:9px;letter-spacing:4px;
+    color:rgba(255,255,255,0.12);pointer-events:none;white-space:nowrap;
+    transition:color 0.6s ease;text-transform:uppercase;
+  }
+  #status.listening {color:rgba(34,197,94,0.85); animation:breathe 1.4s ease-in-out infinite alternate}
+  #status.processing{color:rgba(139,92,246,0.85); animation:breathe 0.8s ease-in-out infinite alternate}
+  #status.speaking  {color:rgba(255,255,255,0.65);animation:breathe 0.5s ease-in-out infinite alternate}
+  #status.impostor  {color:rgba(239,68,68,0.9);   animation:flicker 0.12s infinite alternate}
+  @keyframes breathe{from{opacity:0.4}to{opacity:1}}
+  @keyframes flicker{from{opacity:0.5}to{opacity:1}}
+</style>
+</head>
+<body>
+<div id="container"></div>
+<div id="status">WEDNESDAY ONLINE</div>
+
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="three.min.js"></script>
+<script>
+// ── QWebChannel bridge ───────────────────────────────────────────────────────
+(function(){
+  if(typeof QWebChannel!=='undefined' && typeof qt!=='undefined'){
+    new QWebChannel(qt.webChannelTransport, function(ch){
+      ch.objects.bridge.stateChanged.connect(applyState);
+    });
+  }
+})();
+
+// ── Config ───────────────────────────────────────────────────────────────────
+var N             = 3500;    // particle count
+var RADIUS        = 1.05;    // sphere radius (reduced)
+var P_SIZE        = 0.009;   // particle sphere geometry base radius
+var BASE_SPEED    = 0.0022;  // idle rotation speed
+var CENTER_SCALE  = 0.18;    // central glow dot size
+
+// ── Scene setup ──────────────────────────────────────────────────────────────
+var container = document.getElementById('container');
+var scene     = new THREE.Scene();
+var camera    = new THREE.PerspectiveCamera(48, 1, 0.1, 1000);
+camera.position.z = 3.0;
+
+var renderer  = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000000, 0);
+container.appendChild(renderer.domElement);
+
+var cvs = renderer.domElement;
+cvs.style.cssText = 'position:absolute;top:0;left:0;';
+
+function resize(){
+  var w = container.clientWidth  || 400;
+  var h = container.clientHeight || 300;
+  renderer.setSize(w, h);
+  camera.aspect = w/h;
+  camera.updateProjectionMatrix();
+}
+resize();
+window.addEventListener('resize', resize);
+setTimeout(resize, 80);
+
+// ── Central glow ─────────────────────────────────────────────────────────────
+var cgGeo = new THREE.BufferGeometry();
+cgGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0,0,0]), 3));
+var cgMat = new THREE.PointsMaterial({
+  color:0xaa88ff, size:CENTER_SCALE,
+  transparent:true, opacity:0.28,
+  blending:THREE.AdditiveBlending, depthWrite:false
+});
+var centerGlow = new THREE.Points(cgGeo, cgMat);
+scene.add(centerGlow);
+
+// ── Build Fibonacci sphere particles ─────────────────────────────────────────
+var goldenAngle = Math.PI * (3 - Math.sqrt(5));
+var positions   = [];   // base Vec3
+
+for(var i = 0; i < N; i++){
+  var y     =  1 - (i / (N-1)) * 2;
+  var r     =  Math.sqrt(1 - y*y);
+  var theta =  goldenAngle * i;
+  positions.push(new THREE.Vector3(
+    Math.cos(theta)*r*RADIUS,
+    y * RADIUS,
+    Math.sin(theta)*r*RADIUS
+  ));
+}
+
+var pGeoOuter = new THREE.SphereGeometry(P_SIZE * 1.1, 5, 5); // Thicker particles for outer layer
+var pGeoInner = new THREE.SphereGeometry(P_SIZE * 0.65, 4, 4); // Thinner particles for inner layer, but large enough to see
+
+var pMat = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  blending: THREE.AdditiveBlending,
+  transparent: true,
+  opacity: 0.88,
+  depthWrite: false,
+});
+
+var mesh  = new THREE.InstancedMesh(pGeoOuter, pMat, N);
+mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+var _m4 = new THREE.Matrix4();
+for(var i = 0; i < N; i++){
+  _m4.setPosition(positions[i]);
+  mesh.setMatrixAt(i, _m4);
+}
+mesh.instanceMatrix.needsUpdate = true;
+
+// ── Build Inner Sphere (Static) ──────────────────────────────────────────────
+var INNER_RADIUS = RADIUS * 0.88; // Bring it a bit closer to the outer shell
+var INNER_N      = 1800; // Fewer particles for the inner sphere
+var innerMesh    = new THREE.InstancedMesh(pGeoInner, pMat, INNER_N);
+
+for(var i = 0; i < INNER_N; i++){
+  var y     =  1 - (i / (INNER_N-1)) * 2;
+  var r     =  Math.sqrt(1 - y*y);
+  var theta =  goldenAngle * i;
+  _m4.setPosition(
+    Math.cos(theta)*r*INNER_RADIUS,
+    y * INNER_RADIUS,
+    Math.sin(theta)*r*INNER_RADIUS
+  );
+  innerMesh.setMatrixAt(i, _m4);
+}
+innerMesh.instanceMatrix.needsUpdate = true;
+
+var group = new THREE.Group();
+group.add(mesh);
+group.add(innerMesh);
+scene.add(group);
+
+// ── State + color palette ─────────────────────────────────────────────────────
+var STATES = {idle:0, listening:1, processing:2, speaking:3, impostor:4};
+var TARGET_COLORS = {
+  idle:       {r:1.00, g:1.00, b:1.00},
+  listening:  {r:0.13, g:0.77, b:0.37},
+  processing: {r:0.55, g:0.36, b:0.98},
+  speaking:   {r:0.80, g:0.88, b:1.00},
+  impostor:   {r:0.95, g:0.27, b:0.27},
+};
+var GLOW_COLORS = {
+  idle:       0x9966ff,
+  listening:  0x22c55e,
+  processing: 0x8b5cf6,
+  speaking:   0xaad4ff,
+  impostor:   0xef4444,
+};
+var SPEEDS = {idle:0.0022, listening:0.010, processing:0.006, speaking:0.016, impostor:0.018};
+
+// State-driven animation params
+var currentState  = 'idle';
+var targetSpeed   = SPEEDS.idle;
+var currentSpeed  = SPEEDS.idle;
+// Current and target tint for smooth lerp
+var tintCur = {r:1,g:1,b:1};
+var tintTgt = {r:1,g:1,b:1};
+
+// Breathing / wave intensity driven by state
+var waveAmp   = 0.0;  // speaking wave amplitude
+var pulseAmp  = 0.0;  // listening pulse
+var chaosAmp  = 0.0;  // impostor chaos
+var tgtWave   = 0.0;
+var tgtPulse  = 0.0;
+var tgtChaos  = 0.0;
+
+function applyState(state){
+  if(!(state in STATES)) state = 'idle';
+  currentState = state;
+  targetSpeed  = SPEEDS[state];
+  var tc = TARGET_COLORS[state];
+  tintTgt = {r:tc.r, g:tc.g, b:tc.b};
+  cgMat.color.setHex(GLOW_COLORS[state]);
+  // Animation targets
+  tgtWave  = (state==='speaking')  ? 1.0 : 0.0;
+  tgtPulse = (state==='listening') ? 1.0 : 0.0;
+  tgtChaos = (state==='impostor')  ? 1.0 : 0.0;
+  // Status label
+  var el = document.getElementById('status');
+  el.className = state;
+  el.textContent = {idle:'WEDNESDAY ONLINE',listening:'LISTENING...',
+    processing:'PROCESSING',speaking:'RESPONDING',impostor:'UNRECOGNISED USER'}[state]||'WEDNESDAY ONLINE';
+}
+window.setState = applyState;
+
+// ── Animation loop ────────────────────────────────────────────────────────────
+var t = 0;
+
+function animate(){
+  requestAnimationFrame(animate);
+  t += 0.016;
+
+  // Smooth speed
+  currentSpeed += (targetSpeed - currentSpeed) * 0.04;
+  // Smooth tint
+  tintCur.r += (tintTgt.r - tintCur.r) * 0.05;
+  tintCur.g += (tintTgt.g - tintCur.g) * 0.05;
+  tintCur.b += (tintTgt.b - tintCur.b) * 0.05;
+  pMat.color.setRGB(tintCur.r, tintCur.g, tintCur.b);
+
+  // Smooth animation intensities
+  waveAmp  += (tgtWave  - waveAmp)  * 0.06;
+  pulseAmp += (tgtPulse - pulseAmp) * 0.06;
+  chaosAmp += (tgtChaos - chaosAmp) * 0.06;
+
+  // Global processing shimmer
+  var procPhase = (currentState==='processing') ? (0.5 + 0.5*Math.sin(t*3.0)) : 0;
+
+  // Rotate
+  group.rotation.y += currentSpeed;
+  group.rotation.x += currentSpeed * 0.13;
+
+  // Update each particle position (state-based deformation)
+  var needsUpdate = (waveAmp > 0.001 || pulseAmp > 0.001 || chaosAmp > 0.001);
+  if(needsUpdate){
+    for(var i = 0; i < N; i++){
+      var bp = positions[i];
+      var px = bp.x, py = bp.y, pz = bp.z;
+
+      // Speaking: intense organic 3D bumps (resembles audio waveform hitting a sphere)
+      if(waveAmp > 0.001){
+        var bump1 = Math.sin(px * 4.5 + t * 5.0) * Math.cos(py * 4.5 - t * 3.5) * Math.sin(pz * 4.5 + t * 4.0);
+        var bump2 = Math.sin(px * 8.0 - t * 6.0) * Math.cos(py * 8.0 + t * 4.5);
+        var wave = 1.0 + waveAmp * 0.12 * bump1 + waveAmp * 0.06 * bump2;
+        px *= wave; py *= wave; pz *= wave;
+      }
+      
+      // Listening: subtle flowing bumps (like ripples on water)
+      if(pulseAmp > 0.001){
+        var flow1 = Math.sin(px * 3.0 - t * 2.0) * Math.cos(py * 3.0 + t * 1.5) * Math.sin(pz * 3.0 - t * 1.2);
+        var listenFlow = 1.0 + pulseAmp * 0.06 * flow1 + pulseAmp * 0.01 * Math.sin(t * 6.0);
+        px *= listenFlow; py *= listenFlow; pz *= listenFlow;
+      }
+      
+      // Impostor: chaotic jitter
+      if(chaosAmp > 0.001){
+        px += chaosAmp * 0.022 * Math.sin(t*22.0 + py*14.0);
+        py += chaosAmp * 0.022 * Math.cos(t*20.0 + px*14.0);
+        pz += chaosAmp * 0.018 * Math.sin(t*18.0 + pz*12.0);
+      }
+
+      _m4.setPosition(px, py, pz);
+      mesh.setMatrixAt(i, _m4);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  // Glow opacity reacts to state
+  cgMat.opacity = 0.22 + 0.12 * Math.sin(t * 1.8)
+                + pulseAmp * 0.15 * Math.sin(t * 7.0)
+                + waveAmp  * 0.10 * Math.sin(t * 4.5);
+
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>

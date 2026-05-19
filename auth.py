@@ -364,6 +364,55 @@ def get_user(user_id: int):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  ACCOUNT EDITS
+# ─────────────────────────────────────────────────────────────────────────────
+def update_password(user_id: int, current: str, new: str):
+    """Verify current password and replace it. Returns (ok, message)."""
+    if not new or len(new) < 4:
+        return False, "New password must be at least 4 characters."
+    init_db()
+    with _lock:
+        rows = _read_all(_USERS_CSV, _USER_FIELDS)
+        target = None
+        for r in rows:
+            if str(r.get("id")) == str(user_id):
+                target = r; break
+        if target is None:
+            return False, "User not found."
+        if not _verify_password(current, target["password_hash"], target["salt"]):
+            return False, "Current password is incorrect."
+        pw_hash, salt = _hash_password(new)
+        target["password_hash"] = pw_hash
+        target["salt"]          = salt
+        _write_all(_USERS_CSV, _USER_FIELDS, rows)
+    logger.info(f"Password updated for user_id {user_id}")
+    return True, "Password updated."
+
+
+def update_email(user_id: int, new_email: str):
+    new_email = (new_email or "").strip().lower()
+    if "@" not in new_email or "." not in new_email:
+        return False, "Invalid email address."
+    init_db()
+    with _lock:
+        rows = _read_all(_USERS_CSV, _USER_FIELDS)
+        for r in rows:
+            if (r.get("email", "").lower() == new_email and
+                    str(r.get("id")) != str(user_id)):
+                return False, "Email already in use."
+        target = None
+        for r in rows:
+            if str(r.get("id")) == str(user_id):
+                target = r; break
+        if target is None:
+            return False, "User not found."
+        target["email"] = new_email
+        _write_all(_USERS_CSV, _USER_FIELDS, rows)
+    logger.info(f"Email updated for user_id {user_id}")
+    return True, "Email updated."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  SESSION MANAGEMENT
 # ─────────────────────────────────────────────────────────────────────────────
 def start_session(user_id: int) -> int:

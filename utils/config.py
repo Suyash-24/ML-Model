@@ -78,6 +78,13 @@ class Config:
     def set(self, key: str, value):
         self._data[key] = value
 
+    def set_many(self, updates: dict):
+        for k, v in updates.items():
+            self._data[k] = v
+
+    def all(self) -> dict:
+        return dict(self._data)
+
     def save(self, path: str = "config/settings.json"):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
