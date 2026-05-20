@@ -83,16 +83,19 @@ scene.add(centerGlow);
 // ── Build Fibonacci sphere particles ─────────────────────────────────────────
 var goldenAngle = Math.PI * (3 - Math.sqrt(5));
 var positions   = [];   // base Vec3
+var phases      = new Float32Array(N);
+var phases2     = new Float32Array(N);
 
 for(var i = 0; i < N; i++){
   var y     =  1 - (i / (N-1)) * 2;
   var r     =  Math.sqrt(1 - y*y);
   var theta =  goldenAngle * i;
-  positions.push(new THREE.Vector3(
-    Math.cos(theta)*r*RADIUS,
-    y * RADIUS,
-    Math.sin(theta)*r*RADIUS
-  ));
+  var x = Math.cos(theta) * r * RADIUS;
+  var z = Math.sin(theta) * r * RADIUS;
+  positions.push(new THREE.Vector3(x, y * RADIUS, z));
+  // Spatially coherent phases for smooth, premium-looking deformation
+  phases[i]  = x * 2.7 + y * 3.1 + z * 2.9;
+  phases2[i] = x * 4.4 - y * 2.5 + z * 3.7;
 }
 
 var pGeoOuter = new THREE.SphereGeometry(P_SIZE * 1.1, 5, 5); // Thicker particles for outer layer
@@ -226,19 +229,25 @@ function animate(){
       var bp = positions[i];
       var px = bp.x, py = bp.y, pz = bp.z;
 
-      // Speaking: intense organic 3D bumps (resembles audio waveform hitting a sphere)
+      var phase  = phases[i];
+      var phase2 = phases2[i];
+      var scale = 1.0;
+
+      // Speaking: smoother, lower-frequency deformation for a premium feel
       if(waveAmp > 0.001){
-        var bump1 = Math.sin(px * 4.5 + t * 5.0) * Math.cos(py * 4.5 - t * 3.5) * Math.sin(pz * 4.5 + t * 4.0);
-        var bump2 = Math.sin(px * 8.0 - t * 6.0) * Math.cos(py * 8.0 + t * 4.5);
-        var wave = 1.0 + waveAmp * 0.12 * bump1 + waveAmp * 0.06 * bump2;
-        px *= wave; py *= wave; pz *= wave;
+        var slow  = Math.sin(t * 1.6 + phase);
+        var sweep = Math.sin(t * 2.2 + phase2 + py * 1.6);
+        scale += waveAmp * (0.035 * slow + 0.02 * sweep);
       }
       
-      // Listening: subtle flowing bumps (like ripples on water)
+      // Listening: gentle breathing ripples
       if(pulseAmp > 0.001){
-        var flow1 = Math.sin(px * 3.0 - t * 2.0) * Math.cos(py * 3.0 + t * 1.5) * Math.sin(pz * 3.0 - t * 1.2);
-        var listenFlow = 1.0 + pulseAmp * 0.06 * flow1 + pulseAmp * 0.01 * Math.sin(t * 6.0);
-        px *= listenFlow; py *= listenFlow; pz *= listenFlow;
+        var pulse = Math.sin(t * 2.8 + phase2);
+        scale += pulseAmp * (0.02 * pulse + 0.008 * Math.sin(t * 5.2 + phase));
+      }
+
+      if(scale !== 1.0){
+        px *= scale; py *= scale; pz *= scale;
       }
       
       // Impostor: chaotic jitter

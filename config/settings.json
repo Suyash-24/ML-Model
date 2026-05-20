@@ -51,6 +51,14 @@
 
   "mic_energy_threshold": 300,
   "voice_speaking_secs": 2,
+  "voice_listen_always_on": true,
+  "voice_idle_stop_secs": 300,
+  "voice_vad_block_ms": 40,
+  "voice_vad_speech_mult": 2.2,
+  "voice_vad_silence_mult": 1.2,
+  "voice_vad_hangover_frames": 8,
+  "voice_vad_min_ms": 400,
+  "voice_vad_max_secs": 6,
 
   "ai_action_cooldown_frames": 15,
   "start_paused": true,
@@ -63,6 +71,14 @@
   "elevenlabs_api_key": "",
   "_elevenlabs_help": "Optional premium TTS. Leave blank to use free Windows Zira voice.",
 
+  "serper_api_key": "d44834a1e2e4a3cfe7b0d3a2fa109ada21f1012c",
+  "_serper_help": "Optional web search via Serper. Get a free key at serper.dev",
+  "serper_auto_search": true,
+  "serper_max_results": 5,
+  "serper_cache_ttl_secs": 900,
+
   "ollama_model": "llama3.2:3b",
   "_ollama_help": "LLM is local via Ollama — free. Run 'ollama pull llama3.2:3b' once."
+
+
 }

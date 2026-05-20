@@ -25,7 +25,7 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
     QHBoxLayout, QVBoxLayout, QFrame, QScrollArea, QSizePolicy,
-    QLineEdit, QStackedWidget,
+    QLineEdit, QStackedWidget, QTextEdit,
 )
 from PyQt6.QtCore  import Qt, QTimer, QThread, pyqtSignal, QObject, QUrl
 from PyQt6.QtGui   import QFont, QPixmap, QImage, QColor
@@ -378,6 +378,57 @@ class Sidebar(QWidget):
         if dot:
             col = GREEN if active else "#1e293b"
             dot.setStyleSheet(f"background:{col};border-radius:3px;border:none;")
+
+
+def _md_to_html(text: str) -> str:
+    """Convert basic markdown to HTML for chat bubble display."""
+    import html as _html, re
+    _PRE = 'background:#1a1a2e;color:#cdd6f4;padding:10px 14px;border-radius:6px;font-family:Consolas,monospace;font-size:10px;white-space:pre-wrap;margin:4px 0;'
+    _CODE = 'background:#1a1a2e;color:#cdd6f4;padding:1px 5px;border-radius:3px;font-family:Consolas,monospace;'
+    s = _html.escape(text)
+    s = re.sub(r'```(?:\w+)?\n?(.*?)```',
+               lambda m: f'<pre style="{_PRE}">{m.group(1).rstrip()}</pre>',
+               s, flags=re.DOTALL)
+    s = re.sub(r'`([^`]+)`', lambda m: f'<code style="{_CODE}">{m.group(1)}</code>', s)
+    s = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', s)
+    s = re.sub(r'\*(.+?)\*', r'<i>\1</i>', s)
+    s = re.sub(r'(?<!>)\n', '<br>', s)
+    return s
+
+
+class _ChatInput(QTextEdit):
+    """Multi-line input that sends on Enter, inserts newline on Shift+Enter."""
+    enter_pressed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(56)
+        self.setFont(QFont(FONT, 11))
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setStyleSheet(
+            f"QTextEdit{{background:transparent;color:{TXT};border:none;"
+            f"padding:4px 0;line-height:1.5;}}"
+            f"QTextEdit::placeholder{{color:{TXT3};}}")
+        self.document().documentLayout().documentSizeChanged.connect(self._resize)
+
+    def _resize(self, size):
+        h = max(40, min(int(size.height()) + 16, 140))
+        self.setFixedHeight(h)
+
+    def keyPressEvent(self, event):
+        if (event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)):
+            self.enter_pressed.emit()
+        else:
+            super().keyPressEvent(event)
+
+    def text(self):
+        return self.toPlainText()
+
+    def clear_text(self):
+        self.clear()
+        self.setFixedHeight(56)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1067,6 +1118,7 @@ class EyeControlPage(QWidget):
 # ═══════════════════════════════════════════════════════════════════════════════
 class EyeconWindow(QMainWindow):
     chat_requested = pyqtSignal(str, str)
+    sphere_state_requested = pyqtSignal(str)
 
     def __init__(self, user: dict):
         super().__init__()
@@ -1082,6 +1134,7 @@ class EyeconWindow(QMainWindow):
 
         self._build_ui()
         self.chat_requested.connect(self._add_chat_message)
+        self.sphere_state_requested.connect(self._do_set_sphere)
         self._start_camera()
 
         # Pulse dot timer
@@ -1341,79 +1394,126 @@ class EyeconWindow(QMainWindow):
         right_outer.setContentsMargins(0, 0, 0, 0)
         right_outer.setSpacing(0)
 
-        # Chat header
-        chat_hdr = QWidget()
-        chat_hdr.setFixedHeight(48)
-        chat_hdr.setStyleSheet(f"background:{PNL};border-bottom:1px solid {BDR};")
-        hdr_lay = QHBoxLayout(chat_hdr)
-        hdr_lay.setContentsMargins(20, 0, 20, 0)
-        hdr_lay.addWidget(_lbl("CONVERSATION", 9, TXT3, mono=True))
-        hdr_lay.addStretch()
-        hdr_lay.addWidget(_lbl("● LIVE", 8, GREEN, mono=True))
-        right_outer.addWidget(chat_hdr)
-
-        # Scrollable chat area
+        # ── Scrollable chat area ──────────────────────────────────────────────
         self._chat_scroll = QScrollArea()
         self._chat_scroll.setWidgetResizable(True)
         self._chat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._chat_scroll.setStyleSheet(
             f"QScrollArea{{border:none;background:{BG};}}"
-            "QScrollBar:vertical{width:4px;background:transparent;}"
-            f"QScrollBar::handle:vertical{{background:#2a2a2e;border-radius:2px;}}"
+            "QScrollBar:vertical{width:3px;background:transparent;}"
+            f"QScrollBar::handle:vertical{{background:#2a2a2e;border-radius:1px;}}"
             "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}")
 
         chat_content = QWidget()
         chat_content.setStyleSheet(f"background:{BG};")
         self._chat_lay = QVBoxLayout(chat_content)
-        self._chat_lay.setContentsMargins(20, 16, 20, 16)
-        self._chat_lay.setSpacing(14)
+        self._chat_lay.setContentsMargins(24, 20, 24, 20)
+        self._chat_lay.setSpacing(20)
+
+        # ── Welcome widget (centered greeting shown until first message) ──────
+        self._welcome_w = QWidget()
+        self._welcome_w.setStyleSheet("background:transparent;")
+        ww_lay = QVBoxLayout(self._welcome_w)
+        ww_lay.setContentsMargins(0, 0, 0, 0)
+        ww_lay.setSpacing(0)
+        ww_lay.addStretch(1)
+
+        # Premium brand mark (SVG logo)
+        logo = QLabel()
+        logo.setFixedSize(80, 80)
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo.setStyleSheet("background:transparent;border:none;")
+        svg_path = os.path.join(os.path.dirname(__file__), "wednesday_ai_mark_free.svg")
+        pm = QPixmap(svg_path)
+        if not pm.isNull():
+            logo.setPixmap(pm.scaled(
+                80, 80,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+        else:
+            # Fallback gradient badge
+            logo.setText("W")
+            logo.setFont(QFont(FONT, 26, QFont.Weight.Bold))
+            logo.setStyleSheet(
+                "color:#ffffff;"
+                "background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+                "stop:0 #5b21b6,stop:0.5 #7c3aed,stop:1 #db2777);"
+                "border:1.5px solid rgba(255,255,255,0.18);"
+                "border-radius:18px;letter-spacing:2px;padding-bottom:2px;")
+        ww_lay.addWidget(logo, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        h = datetime.now().hour
+        tod = "morning" if h < 12 else "afternoon" if h < 17 else "evening"
+        greet_lbl = QLabel(f"Good {tod}, {self._username}.")
+        greet_lbl.setFont(QFont(FONT, 26, QFont.Weight.Light))
+        greet_lbl.setStyleSheet(f"color:{TXT};background:transparent;")
+        greet_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        greet_lbl.setContentsMargins(0, 2, 0, 0)
+        ww_lay.addWidget(greet_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
+        ww_lay.addStretch(3)
+        self._welcome_w.setMinimumHeight(240)
+
+        self._chat_lay.addWidget(self._welcome_w)
         self._chat_lay.addStretch()
 
         self._chat_scroll.setWidget(chat_content)
         right_outer.addWidget(self._chat_scroll, 1)
 
-        # Input bar
-        inp_w = QWidget()
-        inp_w.setFixedHeight(60)
-        inp_w.setStyleSheet(f"border-top:1px solid {BDR};background:{PNL};")
-        inp_lay = QHBoxLayout(inp_w)
-        inp_lay.setContentsMargins(16, 10, 16, 10)
-        inp_lay.setSpacing(8)
+        # ── Claude-style big rounded input box ────────────────────────────────
+        inp_outer = QWidget()
+        inp_outer.setStyleSheet("background:transparent;")
+        inp_outer_lay = QVBoxLayout(inp_outer)
+        inp_outer_lay.setContentsMargins(20, 10, 20, 6)
+        inp_outer_lay.setSpacing(8)
 
-        self._wake_btn = QPushButton("HEY WEDNESDAY")
-        self._wake_btn.setFont(QFont(FONT_MONO, 8))
-        self._wake_btn.setFixedSize(100, 36)
-        self._wake_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._wake_btn.setStyleSheet(
-            f"QPushButton{{background:transparent;color:{TXT3};"
-            f"border:1px solid {BDR};border-radius:8px;letter-spacing:1px;}}"
-            f"QPushButton:hover{{color:{TXT2};border-color:rgba(255,255,255,0.18);}}")
-        self._wake_btn.clicked.connect(self._on_wake)
-        inp_lay.addWidget(self._wake_btn)
+        inp_box = QWidget()
+        inp_box.setStyleSheet(
+            f"background:#1e1e21;"
+            f"border:1px solid rgba(255,255,255,0.1);"
+            f"border-radius:16px;")
+        inp_box_lay = QVBoxLayout(inp_box)
+        inp_box_lay.setContentsMargins(16, 14, 16, 10)
+        inp_box_lay.setSpacing(6)
 
-        self._input = QLineEdit()
-        self._input.setPlaceholderText("Message WEDNESDAY...")
-        self._input.setFont(QFont(FONT, 11))
-        self._input.setFixedHeight(36)
-        self._input.setStyleSheet(
-            f"QLineEdit{{background:{PNL2};color:{TXT};border:1px solid {BDR};"
-            f"border-radius:10px;padding:0 14px;}}"
-            f"QLineEdit:focus{{border:1px solid rgba(139,92,246,0.45);}}"
-            f"QLineEdit::placeholder{{color:{TXT3};}}")
-        self._input.returnPressed.connect(self._send_msg)
-        inp_lay.addWidget(self._input, 1)
+        self._input = _ChatInput()
+        self._input.setPlaceholderText("How can I help you today?")
+        self._input.enter_pressed.connect(self._send_msg)
+        inp_box_lay.addWidget(self._input)
 
-        self._send_btn = QPushButton("\u27A4")
-        self._send_btn.setFixedSize(36, 36)
-        self._send_btn.setFont(QFont(FONT, 13))
+        # Bottom action row inside input box
+        inp_act = QHBoxLayout()
+        inp_act.setContentsMargins(0, 0, 0, 0)
+        inp_act.setSpacing(8)
+
+        inp_act.addStretch()
+
+        mic_btn = QPushButton("🎤")
+        mic_btn.setFixedSize(30, 30)
+        mic_btn.setFont(QFont("Segoe UI Emoji", 12))
+        mic_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        mic_btn.setToolTip("Voice (or clap twice)")
+        mic_btn.setStyleSheet(
+            f"QPushButton{{background:transparent;color:{TXT3};border:none;}}"
+            f"QPushButton:hover{{color:{TXT};}}")
+        mic_btn.clicked.connect(self._on_wake)
+        inp_act.addWidget(mic_btn)
+
+        self._send_btn = QPushButton("➤")
+        self._send_btn.setFixedSize(32, 32)
+        self._send_btn.setFont(QFont("Segoe UI Emoji", 12))
         self._send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._send_btn.setStyleSheet(
             f"QPushButton{{background:{ACCENT2};color:#fff;border:none;border-radius:10px;}}"
             f"QPushButton:hover{{background:#7c3aed;}}")
         self._send_btn.clicked.connect(self._on_send_clicked)
-        inp_lay.addWidget(self._send_btn)
+        inp_act.addWidget(self._send_btn)
 
-        right_outer.addWidget(inp_w)
+        inp_box_lay.addLayout(inp_act)
+        inp_outer_lay.addWidget(inp_box)
+
+        # Chips removed — will be re-enabled when they have real functionality
+
+        right_outer.addWidget(inp_outer)
         body_lay.addWidget(right, 4)   # 4 parts width
 
         return page
@@ -1425,23 +1525,33 @@ class EyeconWindow(QMainWindow):
 
     def _on_send_clicked(self):
         if hasattr(self, "_send_btn") and self._send_btn.text() == "■":
-            # User clicked Stop during typing
             if hasattr(self, "_type_timer") and self._type_timer.isActive():
                 self._type_timer.stop()
-                self._type_lbl.setText(self._type_text)
+                self._type_lbl.setTextFormat(Qt.TextFormat.RichText)
+                self._type_lbl.setText(self._type_html)
                 if hasattr(self, "_type_act_w"):
                     self._type_act_w.show()
-            self._send_btn.setText("\u27A4")
+            self._send_btn.setText("➤")
         else:
             self._send_msg()
 
+    def _dismiss_welcome(self):
+        """Remove welcome greeting and chips on first user message."""
+        if hasattr(self, "_welcome_w") and self._welcome_w is not None:
+            self._chat_lay.removeWidget(self._welcome_w)
+            self._welcome_w.deleteLater()
+            self._welcome_w = None
+        if hasattr(self, "_chips_w") and self._chips_w is not None:
+            self._chips_w.hide()
+
     def _send_msg(self):
-        txt = self._input.text().strip()
+        txt = self._input.text()
         if txt:
-            self._input.clear()
+            self._input.clear_text()
             self._on_message(txt)
 
     def _add_chat_message(self, role, text):
+        # ── Loading indicator ───────────────────────────────────────────────
         if role == "loading":
             if hasattr(self, "_send_btn"):
                 self._send_btn.setText("■")
@@ -1449,28 +1559,14 @@ class EyeconWindow(QMainWindow):
                 return
             row = QWidget()
             row.setStyleSheet("background:transparent;")
-            row_lay = QHBoxLayout(row)
-            row_lay.setContentsMargins(0, 2, 0, 2)
-            row_lay.setSpacing(10)
-            
-            av = QLabel("F")
-            av.setFixedSize(30, 30)
-            av.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            av.setFont(QFont(FONT, 11, QFont.Weight.Bold))
-            av.setStyleSheet(f"background:{ACCENT2};color:#fff;border-radius:15px;border:none;")
-            row_lay.addWidget(av, 0, Qt.AlignmentFlag.AlignTop)
-            
-            msg_col = QVBoxLayout()
-            msg_col.setSpacing(3)
-            tag = QLabel("WEDNESDAY")
-            tag.setFont(QFont(FONT_MONO, 8))
-            tag.setStyleSheet(f"color:{ACCENT2};background:transparent;letter-spacing:1px;")
-            msg_col.addWidget(tag)
-            
-            self._loading_lbl = LoadingRings()
-            msg_col.addWidget(self._loading_lbl, 0, Qt.AlignmentFlag.AlignLeft)
-            row_lay.addLayout(msg_col, 1)
-            
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(16, 8, 16, 8)
+            rl.setSpacing(10)
+            dot_lbl = QLabel("● ● ●")
+            dot_lbl.setFont(QFont(FONT, 10))
+            dot_lbl.setStyleSheet(f"color:{TXT3};background:transparent;letter-spacing:4px;")
+            rl.addWidget(dot_lbl)
+            rl.addStretch()
             idx = self._chat_lay.count() - 1
             self._chat_lay.insertWidget(idx, row)
             self._loading_row = row
@@ -1484,74 +1580,69 @@ class EyeconWindow(QMainWindow):
 
         row = QWidget()
         row.setStyleSheet("background:transparent;")
-        row_lay = QHBoxLayout(row)
-        row_lay.setContentsMargins(0, 2, 0, 2)
-        row_lay.setSpacing(10)
+        row_lay = QVBoxLayout(row)
+        row_lay.setContentsMargins(8, 6, 8, 6)
+        row_lay.setSpacing(0)
 
+        # ── System notice ───────────────────────────────────────────────────
         if role == "system":
             lbl = _lbl(text, 9, TXT3, mono=True)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             row_lay.addWidget(lbl)
+
+        # ── Wednesday response — Claude-style plain text ────────────────────
         elif role == "wednesday":
-            av = QLabel("F")
-            av.setFixedSize(30, 30)
-            av.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            av.setFont(QFont(FONT, 11, QFont.Weight.Bold))
-            av.setStyleSheet(f"background:{ACCENT2};color:#fff;border-radius:15px;border:none;")
-            row_lay.addWidget(av, 0, Qt.AlignmentFlag.AlignTop)
-            msg_col = QVBoxLayout()
-            msg_col.setSpacing(3)
-            tag = QLabel("WEDNESDAY")
-            tag.setFont(QFont(FONT_MONO, 8))
-            tag.setStyleSheet(f"color:{ACCENT2};background:transparent;letter-spacing:1px;")
-            msg_col.addWidget(tag)
             bubble = QLabel("")
             bubble.setFont(QFont(FONT, 11))
             bubble.setWordWrap(True)
-            bubble.setStyleSheet(f"color:{TXT};background:transparent;padding:4px 0px;line-height:1.5;")
-            msg_col.addWidget(bubble)
-            
-            # Action Buttons Container (Hidden during typing)
+            bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            bubble.setStyleSheet(
+                f"color:{TXT};background:transparent;padding:2px 8px;"
+                f"line-height:1.6;")
+
+            # Action buttons — shown after typing completes
             act_w = QWidget()
             act_w.setStyleSheet("background:transparent;")
             act_lay = QHBoxLayout(act_w)
-            act_lay.setContentsMargins(0, 4, 0, 0)
-            act_lay.setSpacing(12)
-            
-            def make_act_btn(icon_text, tooltip):
-                btn = QPushButton(icon_text)
-                btn.setToolTip(tooltip)
-                btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn.setStyleSheet(f"QPushButton{{background:transparent;color:{TXT3};border:none;font-size:14px;}} "
-                                  f"QPushButton:hover{{color:{ACCENT2};}}")
-                btn.setFixedSize(24, 24)
-                return btn
+            act_lay.setContentsMargins(8, 6, 0, 2)
+            act_lay.setSpacing(4)
 
-            copy_btn = make_act_btn("\u29C9", "Copy")
-            like_btn = make_act_btn("\u21E7", "Like")
-            dislike_btn = make_act_btn("\u21E9", "Dislike")
-            retry_btn = make_act_btn("\u21BB", "Retry")
-            
+            def _act_btn(icon, tip):
+                b = QPushButton(icon)
+                b.setToolTip(tip)
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setFixedSize(26, 26)
+                b.setFont(QFont("Segoe UI Emoji", 11))
+                b.setStyleSheet(
+                    f"QPushButton{{background:transparent;color:{TXT3};"
+                    f"border:1px solid transparent;border-radius:6px;padding:0;}}"
+                    f"QPushButton:hover{{color:{TXT};border-color:rgba(255,255,255,0.1);}}")
+                return b
+
+            copy_btn  = _act_btn("⧉", "Copy")
+            retry_btn = _act_btn("↻", "Retry")
             copy_btn.clicked.connect(lambda _, t=text: QApplication.clipboard().setText(t))
-            retry_btn.clicked.connect(lambda _: self._on_message(self._last_user_query) if hasattr(self, '_last_user_query') else None)
-            
+            retry_btn.clicked.connect(
+                lambda _: self._on_message(self._last_user_query)
+                if hasattr(self, "_last_user_query") else None)
             act_lay.addWidget(copy_btn)
-            act_lay.addWidget(like_btn)
-            act_lay.addWidget(dislike_btn)
             act_lay.addWidget(retry_btn)
             act_lay.addStretch()
-            
             act_w.hide()
-            msg_col.addWidget(act_w)
-            
-            row_lay.addLayout(msg_col, 1)
-            
-            # Typing animation
-            self._type_idx = 0
+
+            row_lay.addWidget(bubble)
+            row_lay.addWidget(act_w)
+
+            # Typing animation — plain text while running, HTML when done
+            self._type_idx  = 0
             self._type_text = text
-            self._type_lbl = bubble
+            self._type_html = _md_to_html(text)
+            self._type_lbl  = bubble
             self._type_act_w = act_w
+            if hasattr(self, "_type_timer") and self._type_timer.isActive():
+                self._type_timer.stop()
             self._type_timer = QTimer(self)
+
             def type_char():
                 if self._type_idx < len(self._type_text):
                     self._type_idx += 1
@@ -1559,32 +1650,35 @@ class EyeconWindow(QMainWindow):
                     self._scroll_to_bottom()
                 else:
                     self._type_timer.stop()
+                    self._type_lbl.setTextFormat(Qt.TextFormat.RichText)
+                    self._type_lbl.setText(self._type_html)
                     self._type_act_w.show()
                     if hasattr(self, "_send_btn"):
-                        self._send_btn.setText("\u27A4")
+                        self._send_btn.setText("➤")
                     QTimer.singleShot(10, self._scroll_to_bottom)
+
             self._type_timer.timeout.connect(type_char)
-            self._type_timer.start(15) # 15ms per character (fast reading)
-            
+            self._type_timer.start(10)
+
+        # ── User message — Claude-style dark bubble right ───────────────────
         else:
-            row_lay.addStretch()
-            msg_col = QVBoxLayout()
-            msg_col.setSpacing(3)
-            tag = QLabel("YOU")
-            tag.setFont(QFont(FONT_MONO, 8))
-            tag.setAlignment(Qt.AlignmentFlag.AlignRight)
-            tag.setStyleSheet(f"color:{GREEN};background:transparent;letter-spacing:1px;")
-            msg_col.addWidget(tag)
+            self._dismiss_welcome()
+            outer = QHBoxLayout()
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
+            outer.addStretch()
+
             bubble = QLabel(text)
             bubble.setFont(QFont(FONT, 11))
             bubble.setWordWrap(True)
-            bubble.setMaximumWidth(480)
-            bubble.setAlignment(Qt.AlignmentFlag.AlignRight)
+            bubble.setMaximumWidth(440)
+            bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             bubble.setStyleSheet(
-                f"color:{TXT};background:{SURFACE};border:1px solid {BDR};"
-                f"border-radius:12px 4px 12px 12px;padding:12px 16px;")
-            msg_col.addWidget(bubble)
-            row_lay.addLayout(msg_col)
+                f"color:#f0f0f0;background:#2d2d31;"
+                f"border:none;border-radius:18px;"
+                f"padding:12px 18px;")
+            outer.addWidget(bubble)
+            row_lay.addLayout(outer)
 
         idx = self._chat_lay.count() - 1
         self._chat_lay.insertWidget(idx, row)
@@ -1709,6 +1803,8 @@ class EyeconWindow(QMainWindow):
         "bio_fail_streak_limit", "bio_grace_period_secs",
         "bio_check_interval_secs",
         "scroll_use_shift_hscroll",
+        "serper_api_key", "serper_auto_search",
+        "serper_max_results", "serper_cache_ttl_secs",
     }
 
     def _on_settings_saved(self, updates: dict):
@@ -1725,6 +1821,22 @@ class EyeconWindow(QMainWindow):
             eye_t._buf_size = int(updates["gaze_smooth_frames"])
         if wed is not None and "wednesday_memory_turns" in updates:
             wed._memory_max = int(updates["wednesday_memory_turns"])
+        if wed is not None:
+            if "serper_api_key" in updates:
+                wed._serper_key = (
+                    updates["serper_api_key"] or os.getenv("SERPER_API_KEY", "")
+                ).strip()
+                wed._serper_cache = {}
+            if "serper_auto_search" in updates:
+                wed._serper_auto = bool(updates["serper_auto_search"])
+            if "serper_max_results" in updates:
+                wed._serper_max_results = max(
+                    1, min(10, int(updates["serper_max_results"]))
+                )
+            if "serper_cache_ttl_secs" in updates:
+                wed._serper_cache_ttl = max(
+                    60, int(updates["serper_cache_ttl_secs"])
+                )
 
         live = sum(1 for k in updates if k in self._LIVE_KEYS)
         deferred = len(updates) - live
@@ -1803,7 +1915,7 @@ class EyeconWindow(QMainWindow):
     # ─────────────────────────────────────────────────────────────────────────
     def _set_sphere_state(self, state: str):
         """Call from any thread — safe."""
-        QTimer.singleShot(0, lambda: self._do_set_sphere(state))
+        self.sphere_state_requested.emit(state)
 
     def _do_set_sphere(self, state: str):
         self._bridge.set_state(state)

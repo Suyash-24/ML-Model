@@ -54,10 +54,24 @@ _DEFAULTS = {
     # Voice
     "mic_energy_threshold": 300,
     "voice_speaking_secs":  2,
+    "voice_listen_always_on": True,
+    "voice_idle_stop_secs": 300,
+    "voice_vad_block_ms": 40,
+    "voice_vad_speech_mult": 2.2,
+    "voice_vad_silence_mult": 1.2,
+    "voice_vad_hangover_frames": 8,
+    "voice_vad_min_ms": 400,
+    "voice_vad_max_secs": 6,
 
     # AI decision
     "ai_action_cooldown_frames": 15,
     "start_paused": True,
+
+    # Web search (Serper)
+    "serper_api_key": "",
+    "serper_auto_search": False,
+    "serper_max_results": 5,
+    "serper_cache_ttl_secs": 900,
 }
 
 

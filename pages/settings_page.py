@@ -308,6 +308,29 @@ class SettingsPage(QWidget):
         self._track("ollama_model", ol)
         c.add(control_row("Ollama model", ol))
 
+        # Serper API key (masked)
+        sp = QLineEdit(str(self._cfg.get("serper_api_key", "")))
+        sp.setEchoMode(QLineEdit.EchoMode.Password)
+        sp.setStyleSheet(_LINEEDIT_QSS)
+        sp.setPlaceholderText("optional — enables web search")
+        sp.textChanged.connect(
+            lambda t: self._mark_dirty("serper_api_key", t.strip()))
+        self._track("serper_api_key", sp)
+        c.add(control_row("Serper API key", sp))
+
+        st = Toggle(bool(self._cfg.get("serper_auto_search", False)))
+        st.toggled.connect(
+            lambda v: self._mark_dirty("serper_auto_search", bool(v)))
+        self._track("serper_auto_search", st)
+        c.add(control_row("Use web search for chat", st))
+
+        s3 = LabeledSlider("Search results count", 1, 10,
+                           float(self._cfg.get("serper_max_results", 5)),
+                           step=1)
+        s3.valueChanged.connect(
+            lambda v: self._mark_dirty("serper_max_results", int(v)))
+        self._track("serper_max_results", s3); c.add(s3)
+
         # ElevenLabs key (masked)
         el = QLineEdit(str(self._cfg.get("elevenlabs_api_key", "")))
         el.setEchoMode(QLineEdit.EchoMode.Password)
